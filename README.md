@@ -1,0 +1,1 @@
+# node-red-contrib-fff-ws-session-manager
