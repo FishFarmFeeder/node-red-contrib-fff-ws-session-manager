@@ -1,0 +1,91 @@
+[
+    {
+        "id": "example-flow-tab",
+        "type": "tab",
+        "label": "WS Session Example",
+        "disabled": false,
+        "info": ""
+    },
+    {
+        "id": "ws-session-node",
+        "type": "fff-ws-session",
+        "z": "example-flow-tab",
+        "name": "Session Manager",
+        "contextKey": "ws_sessions",
+        "scope": "global",
+        "x": 400,
+        "y": 200,
+        "wires": [
+            [
+                "debug-node"
+            ]
+        ]
+    },
+    {
+        "id": "inject-connect",
+        "type": "inject",
+        "z": "example-flow-tab",
+        "name": "Simulate Connect",
+        "props": [
+            {
+                "p": "status",
+                "v": "{\"event\":\"connect\",\"_session\":{\"id\":\"user1\"}}",
+                "vt": "json"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 180,
+        "y": 140,
+        "wires": [
+            [
+                "ws-session-node"
+            ]
+        ]
+    },
+    {
+        "id": "inject-disconnect",
+        "type": "inject",
+        "z": "example-flow-tab",
+        "name": "Simulate Disconnect",
+        "props": [
+            {
+                "p": "status",
+                "v": "{\"event\":\"disconnect\",\"_session\":{\"id\":\"user1\"}}",
+                "vt": "json"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 190,
+        "y": 260,
+        "wires": [
+            [
+                "ws-session-node"
+            ]
+        ]
+    },
+    {
+        "id": "debug-node",
+        "type": "debug",
+        "z": "example-flow-tab",
+        "name": "Output",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 600,
+        "y": 200,
+        "wires": []
+    }
+]

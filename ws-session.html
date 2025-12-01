@@ -1,0 +1,126 @@
+<script type="text/javascript">
+    RED.nodes.registerType('fff-ws-session',{
+        category: 'Feeding Systems',
+        color: '#C7E9C0',
+        defaults: {
+            name: {value:""},
+            contextKey: {value:"ws_sessions"},
+            scope: {value:"global"},
+            prefix: {value:""},
+            encryptConfig: {value:false},
+            encryptionKey: {value:"default_key_change_me"}
+        },
+        inputs:1,
+        outputs:2,
+        icon: "feed.svg",
+        label: function() {
+            return this.name || "WS Sessions";
+        },
+        oneditprepare: function() {
+            $('#node-input-encryptConfig').change(function() {
+                if ($(this).is(':checked')) {
+                    $('#encryption-key-row').show();
+                } else {
+                    $('#encryption-key-row').hide();
+                }
+            });
+            $('#node-input-encryptConfig').change();
+            
+            // Validation
+            $('#node-input-encryptionKey').on('input', function() {
+                if ($(this).val() === 'default_key_change_me') {
+                    $(this).addClass('input-error');
+                } else {
+                    $(this).removeClass('input-error');
+                }
+            });
+        },
+        oneditsave: function() {
+            if ($('#node-input-encryptConfig').is(':checked') && $('#node-input-encryptionKey').val() === 'default_key_change_me') {
+                alert('Please change the default encryption key for security.');
+                return false;
+            }
+        }
+    });
+</script>
+
+<script type="text/html" data-template-name="fff-ws-session">
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+        <input type="text" id="node-input-name" placeholder="Optional node name" title="Optional label for this node">
+    </div>
+    <div class="form-row">
+        <label for="node-input-contextKey"><i class="fa fa-database"></i> Context Key</label>
+        <input type="text" id="node-input-contextKey" placeholder="ws_sessions" title="Key used to store sessions in context">
+    </div>
+    <div class="form-row">
+        <label for="node-input-scope"><i class="fa fa-crosshairs"></i> Scope</label>
+        <select id="node-input-scope" title="Context scope: Global (shared), Flow (per flow), Node (per node)">
+            <option value="global">Global</option>
+            <option value="flow">Flow</option>
+            <option value="node">Node</option>
+        </select>
+    </div>
+    <div class="form-row">
+        <label for="node-input-prefix"><i class="fa fa-tag"></i> Key Prefix</label>
+        <input type="text" id="node-input-prefix" placeholder="e.g., user_" title="Optional prefix for context key to avoid conflicts">
+    </div>
+    <div class="form-row">
+        <label for="node-input-encryptConfig"><i class="fa fa-lock"></i> Encrypt Config</label>
+        <input type="checkbox" id="node-input-encryptConfig" title="Enable encryption for session config data">
+    </div>
+    <div class="form-row" id="encryption-key-row">
+        <label for="node-input-encryptionKey"><i class="fa fa-key"></i> Encryption Key</label>
+        <input type="password" id="node-input-encryptionKey" placeholder="default_key_change_me" title="Key for AES encryption (change from default)">
+    </div>
+</script>
+
+<script type="text/html" data-help-name="fff-ws-session">
+    <p>Manages WebSocket sessions using Node-RED Context.</p>
+    
+    <h3>Inputs</h3>
+    <dl class="message-properties">
+        <dt>status.event <span class="property-type">string</span></dt>
+        <dd>The event type: <code>connect</code>, <code>disconnect</code>, <code>update</code>, <code>timeout</code>, or <code>get_sessions</code>.</dd>
+        
+        <dt>status._session.id <span class="property-type">string</span></dt>
+        <dd>The unique identifier for the session (not required for <code>timeout</code> or <code>get_sessions</code>).</dd>
+        
+        <dt class="optional">status.config <span class="property-type">object</span></dt>
+        <dd>Configuration object to update (only for <code>update</code> event). Example: <code>{userId: '123', language: 'es'}</code>.</dd>
+        
+        <dt class="optional">status.timeout <span class="property-type">number</span></dt>
+        <dd>Timeout in milliseconds for <code>timeout</code> event (default: 300000).</dd>
+    </dl>
+
+    <h3>Outputs</h3>
+    <ol class="node-ports">
+        <li>Standard Output
+            <dl class="message-properties">
+                <dt>payload <span class="property-type">object</span></dt>
+                <dd>The original message is passed through on successful operations.</dd>
+            </dl>
+        </li>
+        <li>Error Output (optional)
+            <dl class="message-properties">
+                <dt>payload <span class="property-type">object</span></dt>
+                <dd>Error messages are sent here if validation fails or context operations error.</dd>
+            </dl>
+        </li>
+    </ol>
+    
+    <h3>Details</h3>
+    <p>This node maintains a list of active WebSocket sessions in the specified context store (default: <code>global.ws_sessions</code>).</p>
+    <p>It listens for connection and disconnection events to keep the list in sync.</p>
+    <p>Logs successful operations (connects, disconnects, updates) and errors for monitoring. The node status shows active sessions and total operations.</p>
+    <p>Uses a Map for efficient O(1) lookups and includes concurrency control to handle simultaneous messages safely.</p>
+    <p>Security features: Sanitizes session IDs, optional config encryption, and key prefixing for isolation.</p>
+    <p>Additional events: <code>timeout</code> to clean expired sessions, <code>get_sessions</code> to retrieve active sessions list.</p>
+    
+    <h4>Retrieving Session Data</h4>
+    <p>To access stored session data from other nodes, use Node-RED's context functions:</p>
+    <ul>
+        <li><code>global.get('ws_sessions').get('session_id').config.userId</code> - Get specific config data.</li>
+        <li><code>Array.from(global.get('ws_sessions').values())</code> - Get all sessions as array.</li>
+    </ul>
+</script>
