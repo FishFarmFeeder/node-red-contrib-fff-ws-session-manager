@@ -147,6 +147,68 @@ describe('WS Session Node', function () {
         });
     });
 
+    it('get_sessions should work without _session', function (done) {
+        this.timeout(5000);
+        const flow = [
+            { id: 'n1', type: 'fff-ws-session', name: 'test', wires: [['n2'], ['n3']] },
+            { id: 'n2', type: 'helper' },
+            { id: 'n3', type: 'helper' }
+        ];
+        helper.load(wsSessionNode, flow, function () {
+            const n1 = helper.getNode('n1');
+            const n2 = helper.getNode('n2');
+            let got = false;
+            n2.on('input', function (msg) {
+                if (msg.payload && Array.isArray(msg.payload)) got = true;
+            });
+            // Create a session normally
+            n1.receive({ status: { event: 'connect', _session: { id: 's1' } } });
+            setTimeout(function () {
+                // Call get_sessions without _session
+                n1.receive({ status: { event: 'get_sessions' } });
+                setTimeout(function () {
+                    got.should.be.true;
+                    done();
+                }, 500);
+            }, 500);
+        });
+    });
+
+    it('connect should accept initial config', function (done) {
+        this.timeout(5000);
+        const flow = [
+            { id: 'n1', type: 'fff-ws-session', name: 'test', wires: [['n2'], ['n3']] },
+            { id: 'n2', type: 'helper' },
+            { id: 'n3', type: 'helper' }
+        ];
+        helper.load(wsSessionNode, flow, function () {
+            const n1 = helper.getNode('n1');
+            const n2 = helper.getNode('n2');
+            let created = false;
+            n2.on('input', function (msg) {
+                // after connect, call get_sessions and verify the config is present
+            });
+            let got = false;
+            n2.on('input', function (msg) {
+                if (msg.payload && Array.isArray(msg.payload)) {
+                    const found = msg.payload.find(p => p.id === 'init1');
+                    try {
+                        if (!found) return done(new Error('session init1 not found in payload: ' + JSON.stringify(msg.payload)));
+                        if (!found.config || found.config.foo !== 'bar') return done(new Error('config mismatch: ' + JSON.stringify(found)));
+                        got = true;
+                        return done();
+                    } catch (err) {
+                        return done(err);
+                    }
+                }
+            });
+            n1.receive({ status: { event: 'connect', _session: { id: 'init1' }, config: { foo: 'bar' } } });
+            setTimeout(function () {
+                n1.receive({ status: { event: 'get_sessions' } });
+            }, 500);
+        });
+    });
+
     it('should handle get_sessions event', function (done) {
         this.timeout(5000);
         const flow = [

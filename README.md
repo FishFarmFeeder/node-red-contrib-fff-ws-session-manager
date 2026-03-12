@@ -34,6 +34,10 @@ npm install node-red-contrib-fff-ws-session-manager
 4. **Status**: Displays the number of active sessions and total operations (connects, disconnects, updates) for monitoring.
 5. **Security**: Optional config encryption, session ID sanitization, and key prefixing for isolation.
 
+### Encryption key (credentials)
+
+If you enable "Encrypt Config" in the node, set the encryption key in the node's credentials (secure storage) rather than in the node configuration. In the Node-RED editor: open the node, enable "Encrypt Config", then click the small edit/lock icon to enter the encryption key in the credentials dialog. Node-RED stores credentials encrypted; they are not saved in plaintext in flows.json.
+
 ### Input Message Structure
 
 The node expects `msg.status` to contain event details. Invalid messages will be rejected and sent to the error output.
@@ -115,16 +119,16 @@ You can access session data from other nodes using Node-RED's context API:
 
 ```javascript
 // In a Function node, retrieve all sessions
-const sessions = global.get('ws_sessions') || {};
+const sessions = global.get('ws_sessions');
 
-// Get specific session
+// Get specific session (sessions is a Map)
 const sessionId = msg.sessionId;
-const session = sessions[sessionId];
+const session = sessions && sessions.get ? sessions.get(sessionId) : undefined;
 
 if (session) {
     msg.user = session.config.userId;
     msg.lang = session.config.language;
-    msg.created = session.timestamp;
+    msg.created = session.connectedAt;
     return msg;
 } else {
     node.warn('Session not found: ' + sessionId);
@@ -216,6 +220,30 @@ Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for de
 - Run tests: `npm test`
 - Lint code: `npm run lint`
 - Fix linting issues: `npm run lint:fix`
+
+## ✅ Tests & Coverage
+
+This project includes a comprehensive test-suite (Mocha + Chai) and coverage reporting via `nyc`.
+
+- Run unit tests:
+
+```bash
+npm test
+```
+
+- Generate coverage report (text + lcov):
+
+```bash
+npm run coverage
+```
+
+Coverage configuration is in `.nycrc`. The `coverage` script uses `nyc --reporter=lcov --reporter=text mocha` and will print a summary to the console and produce an `lcov` report useful for CI integrations.
+
+## ⚠️ Note about session persistence on Node-RED start
+
+To avoid stale/ghost sessions after Node-RED restarts or flow redeploys, this node now clears the persisted sessions for the configured `contextKey` when the node initializes. This prevents previously-closed sessions from appearing as active after a restart. If you rely on external persistence, consider adapting the node or using external shared storage to restore session state explicitly.
+
+If you want different behavior (preserve sessions across restarts), the node source exposes where to change this behavior (`ws-session.js` — remove the reset on init or implement a `preserveSessions` option).
 
 ## 📄 License
 

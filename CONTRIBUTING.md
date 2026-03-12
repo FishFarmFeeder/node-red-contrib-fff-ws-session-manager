@@ -29,6 +29,24 @@ This section guides you through submitting an enhancement suggestion, including 
 - Include screenshots and animated GIFs in your pull request whenever possible.
 - Follow the JavaScript styleguide.
 
+### Testing
+
+- Run unit tests locally with:
+
+```bash
+npm test
+```
+
+- Generate coverage (text + lcov):
+
+```bash
+npm run coverage
+```
+
+- New tests should be added under the `test/` folder using Mocha and Chai. Aim for deterministic, small, focused tests that avoid relying on timing where possible. Use `node-red-node-test-helper` for loading nodes in a headless test environment.
+
+- If a test is flaky due to Node-RED internal timing or context isolation, prefer refactoring the code to make behavior easier to test (extract pure functions) rather than adding brittle sleeps.
+
 ## Styleguides
 
 ### JavaScript Styleguide

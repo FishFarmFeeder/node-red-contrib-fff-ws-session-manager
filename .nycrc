@@ -1,0 +1,18 @@
+{
+  "all": true,
+  "include": [
+    "ws-session.js"
+  ],
+  "exclude": [
+    "test"
+  ],
+  "reporter": [
+    "lcov",
+    "text"
+  ],
+  "extension": [
+    ".js"
+  ],
+  "cache": false,
+  "check-coverage": false
+}

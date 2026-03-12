@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/SemVer).
 
-## [0.1.0] - 2025-12-01
+## [0.0.1] - 2025-12-01
 
 ### Added
 
@@ -35,3 +35,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/SemVer
 
 - Added session ID sanitization.
 - Optional config encryption.
+
+## [0.0.2] - 2026-03-12
+
+### Added
+
+- Comprehensive unit tests covering validation, encryption, migration, and edge cases.
+- Coverage tooling and script (`nyc` + `npm run coverage`).
+
+### Changed
+
+- Node now resets persisted sessions on node initialization to prevent stale/ghost sessions after Node-RED restarts or deploys.
+
+### Fixed
+
+- Various validation and error handling edge-cases surfaced by new tests.

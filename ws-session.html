@@ -7,8 +7,7 @@
             contextKey: {value:"ws_sessions"},
             scope: {value:"global"},
             prefix: {value:""},
-            encryptConfig: {value:false},
-            encryptionKey: {value:"default_key_change_me"}
+            encryptConfig: {value:false}
         },
         inputs:1,
         outputs:2,
@@ -26,20 +25,11 @@
             });
             $('#node-input-encryptConfig').change();
             
-            // Validation
-            $('#node-input-encryptionKey').on('input', function() {
-                if ($(this).val() === 'default_key_change_me') {
-                    $(this).addClass('input-error');
-                } else {
-                    $(this).removeClass('input-error');
-                }
-            });
+            // Note: encryptionKey is stored in node credentials (secure) and is not available via config.
         },
         oneditsave: function() {
-            if ($('#node-input-encryptConfig').is(':checked') && $('#node-input-encryptionKey').val() === 'default_key_change_me') {
-                alert('Please change the default encryption key for security.');
-                return false;
-            }
+            // Nothing to save for encryptionKey here: key is stored in credentials (secure)
+            return true;
         }
     });
 </script>
@@ -69,10 +59,7 @@
         <label for="node-input-encryptConfig"><i class="fa fa-lock"></i> Encrypt Config</label>
         <input type="checkbox" id="node-input-encryptConfig" title="Enable encryption for session config data">
     </div>
-    <div class="form-row" id="encryption-key-row">
-        <label for="node-input-encryptionKey"><i class="fa fa-key"></i> Encryption Key</label>
-        <input type="password" id="node-input-encryptionKey" placeholder="default_key_change_me" title="Key for AES encryption (change from default)">
-    </div>
+    <!-- Encryption key is stored in node credentials (secure). No plaintext field here. -->
 </script>
 
 <script type="text/html" data-help-name="fff-ws-session">
