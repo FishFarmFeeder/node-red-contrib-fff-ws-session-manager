@@ -1,253 +1,226 @@
-# Node-RED WebSocket Session Manager
+# node-red-contrib-fff-ws-session-manager
 
 [![npm version](https://badge.fury.io/js/node-red-contrib-fff-ws-session-manager.svg)](https://badge.fury.io/js/node-red-contrib-fff-ws-session-manager)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A powerful and flexible **Node-RED** node designed to manage WebSocket sessions with ease. It allows you to track active connections, store session-specific configurations, and handle connection/disconnection events efficiently using Node-RED's Context storage.
+A Node-RED node that tracks active WebSocket sessions and stores per-session configuration in Node-RED context. It reacts to connect, disconnect and update events, optionally encrypts the stored configuration at rest, and exposes a read API for downstream nodes.
 
-## 🚀 Features
+## Requirements
 
-- **Context-Based Storage**: Store sessions in `Global`, `Flow`, or `Node` context.
-- **Real-time Tracking**: Automatically adds and removes sessions upon `connect` and `disconnect` events.
-- **Metadata Management**: Store and update custom configuration data for each session.
-- **Status Indicators**: Visual feedback on the number of active sessions and operation metrics directly on the node.
-- **O(1) Performance**: Optimized for high-performance lookups using Map data structure. Includes concurrency control for simultaneous messages.
+- Node.js `>=20.0.0`
+- Node-RED `>=4.0.0`
 
-## 📦 Installation
+## Installation
 
-Run the following command in your Node-RED user directory (typically `~/.node-red`):
+From the Node-RED user directory (typically `~/.node-red`):
 
 ```bash
 npm install node-red-contrib-fff-ws-session-manager
 ```
 
-**Requirements**: Node.js >=20.0.0, Node-RED >=4.0.0
+## Configuration
 
-## 🛠️ Usage
+The node is registered under the **Feeding Systems** palette as `fff-ws-session`.
 
-1. **Input**: Connect your WebSocket input node (or any node producing session status) to this node.
-2. **Configuration**:
-    - **Name**: Optional label.
-    - **Context Key**: The key used to store the session list (default: `ws_sessions`).
-    - **Scope**: Where to store the data (`Global`, `Flow`, or `Node`).
-3. **Output**: The node passes through the original message on the first output for successful operations. Errors are sent to the optional second output with an `error` property describing the issue.
-4. **Status**: Displays the number of active sessions and total operations (connects, disconnects, updates) for monitoring.
-5. **Security**: Optional config encryption, session ID sanitization, and key prefixing for isolation.
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | string | *(empty)* | Optional editor label. |
+| `contextKey` | string | `ws_sessions` | Key under which sessions are stored in the chosen context scope. |
+| `scope` | enum | `global` | Context scope: `global`, `flow`, or `node`. |
+| `prefix` | string | *(empty)* | Optional prefix prepended to `contextKey` to isolate multiple instances. |
+| `encryptConfig` | boolean | `false` | When enabled, session `config` values are encrypted at rest (AES-256-CBC). |
+| `encryptionKey` | credential (password) | *(empty)* | Encryption key, stored via Node-RED credentials. Visible in the editor only when `encryptConfig` is checked. |
+| `preserveSessions` | boolean | `true` | When `true`, the persisted session list is kept across Node-RED restarts. When `false`, the list is cleared on every node initialisation. |
 
-### Encryption key (credentials)
+## Message contract
 
-If you enable "Encrypt Config" in the node, set the encryption key in the node's credentials (secure storage) rather than in the node configuration. In the Node-RED editor: open the node, enable "Encrypt Config", then click the small edit/lock icon to enter the encryption key in the credentials dialog. Node-RED stores credentials encrypted; they are not saved in plaintext in flows.json.
+### Input
 
-### Input Message Structure
-
-The node expects `msg.status` to contain event details. Invalid messages will be rejected and sent to the error output.
+The node consumes a message whose `msg.status` is an object describing the event.
 
 ```json
 {
     "status": {
         "event": "connect",
-        "_session": {
-            "id": "unique_session_id"
-        },
-        "config": { 
-            "userId": "12345", 
-            "language": "es", 
-            "preferences": { 
-                "theme": "dark", 
-                "notifications": true 
-            }
-        },
+        "_session": { "id": "unique_session_id" },
+        "config": { "userId": "12345", "language": "es" },
         "timeout": 300000
     }
 }
 ```
 
-**Event Types**:
+Required fields per event:
 
-- `connect`: Registers a new session. Creates entry if not exists.
-- `disconnect`: Removes a session from tracking.
-- `update`: Updates the `config` field for an existing session.
-- `timeout`: Removes sessions older than the specified time (in milliseconds).
-- `get_sessions`: Returns array of all active sessions (no `_session` required).
+| Event | `_session.id` | `config` | `timeout` |
+|-------|---------------|----------|-----------|
+| `connect` | required | optional | — |
+| `disconnect` | required | — | — |
+| `update` | required | required (object) | — |
+| `timeout` | — | — | optional (ms, default `300000`) |
+| `get_sessions` | — | — | — |
 
-**Required Fields**:
+`_session.id` is sanitised: it must be a non-empty string of alphanumerics, underscores or dashes, with a maximum length of 100 characters. Messages that fail any validation are rejected and emitted on the error output.
 
-- `msg.status.event` (string): The type of event to process.
-- `msg.status._session.id` (string): Unique session identifier (alphanumeric, underscore, dash only; max 100 chars).
+### Outputs
 
-**Optional Fields**:
+The node has two outputs:
 
-- `msg.status.config` (object): Custom data to store with the session (for `connect` and `update`).
-- `msg.status.timeout` (number): Milliseconds for session age threshold (for `timeout`).
+1. **Pass-through**: on a successful operation, the original `msg` is emitted unchanged. For `get_sessions`, `msg.payload` is set to an array of `{ id, config, connectedAt }` records.
+2. **Error**: on validation failure or runtime error, a cloned message with `msg.error` set to a human-readable string is emitted here.
 
-The `config` field allows you to store any custom data associated with the session, such as user preferences, session-specific settings, or metadata. Once stored, you can access this data from other nodes using: `global.get('ws_sessions')['session_id'].config.userId`
+See [Error routing](#error-routing) for the dual-output behaviour and its rationale.
 
-### Additional Events
+## Events
 
-- **timeout**: Removes sessions older than the specified `timeout` (default 5 minutes). Useful for cleaning expired connections.
-- **get_sessions**: Returns a list of all active sessions in `msg.payload`. Does not require `_session.id`.
+- **`connect`** — registers a new session. If a session with the same `id` already exists, the request is logged as a warning and ignored.
+- **`disconnect`** — removes a session. Disconnecting an unknown session emits a warning but does not error.
+- **`update`** — replaces the `config` object of an existing session. If the session does not exist, the message is sent to the error output.
+- **`timeout`** — removes every session whose `connectedAt` timestamp is older than `msg.status.timeout` milliseconds (default `300000`, i.e. 5 minutes).
+- **`get_sessions`** — emits the full list of active sessions on output 1 as `msg.payload`. Does not modify state.
 
-## 🔧 Troubleshooting
+## Storage model
 
-- **Node Status Shows Errors**: Check Node-RED logs for detailed error messages. Common issues include invalid message structures or context storage limits.
-- **Sessions Not Updating**: Ensure `msg.status._session.id` is a valid string and the session exists for `update` events.
-- **Performance Issues**: For high volumes, monitor the operation count in node status. Consider using `Global` scope for shared access.
-- **Concurrent Access Warnings**: If you see warnings about blocked concurrent access, reduce message frequency or use flow control.
+Sessions are stored in the chosen context scope under `prefix + contextKey` as a plain JavaScript object keyed by `sessionId`:
 
-## 📏 Limits & Constraints
+```js
+{
+    "<sessionId>": {
+        "id": "<sessionId>",
+        "config": <object or encrypted string>,
+        "connectedAt": <epoch ms>
+    }
+}
+```
 
-- **Session Count**: Limited by available memory; tested up to 10,000 sessions without issues.
-- **Config Size**: No hard limit, but large objects may impact performance. Avoid storing large binary data.
-- **Concurrency**: Handles up to 100 simultaneous messages safely with the built-in lock mechanism.
-- **Persistence**: Data is volatile (stored in memory); use external storage for persistence across restarts.
-- **Session ID Length**: Maximum 100 characters; only alphanumeric, underscore, and dash characters allowed.
-- **Context Limits**: Respect Node-RED context storage limits based on your runtime environment.
+The plain-object representation is chosen so that file-backed Node-RED context stores (`localfilesystem`, `file`, etc.) serialise it correctly through `JSON.stringify`/`JSON.parse`. The in-memory legacy `Map` representation and the pre-Map `Array` representation are still readable for backwards compatibility — the first write upgrades the storage to the current format.
 
-## 🚀 Advanced Use Cases
+## Encryption
 
-- **User Authentication**: Store user tokens in `config` and validate in other nodes.
-- **Real-time Dashboards**: Use session data to update UI components dynamically.
-- **Load Balancing**: Distribute sessions across multiple Node-RED instances with shared storage.
-- **Session Timeouts**: Combine with inject nodes to periodically clean expired sessions.
-- **WebSocket Integration**: Connect with Node-RED's WebSocket nodes (e.g., `websocket in`) to automatically manage sessions on connect/disconnect events.
+When `encryptConfig` is enabled, the `config` of each session is encrypted with AES-256-CBC. The key is derived from the configured `encryptionKey` credential via SHA-256, and a random 16-byte IV is generated per encryption. The stored value has the form `"<ivHex>:<cipherHex>"`.
 
-## 💡 Examples
+The encryption key must be supplied via the Node-RED credentials store (a password field appears in the editor when `encryptConfig` is checked). Node-RED persists credentials encrypted; they are not written in plaintext to `flows.json`.
 
-### Code Example: Function Node Integration
+**Missing key behaviour**: if `encryptConfig` is enabled but no credential is provided, the node logs a warning during initialisation and *disables encryption for that instance*. The node never falls back to a hardcoded default key.
 
-You can access session data from other nodes using Node-RED's context API:
+**Decryption failure behaviour**: if a stored entry cannot be decrypted (wrong key, corrupted ciphertext, malformed payload), the entry is omitted from `get_sessions` results and a single `node.error` is emitted listing the affected session IDs.
+
+## Session persistence
+
+Starting with v0.0.3, sessions are preserved across Node-RED restarts and flow redeploys by default (`preserveSessions: true`). Combined with a file-backed context store (e.g. `localfilesystem`), this allows session state to survive process restarts without explicit migration logic.
+
+To restore the v0.0.2 wipe-on-restart behaviour, set `preserveSessions: false` in the node configuration. This may be useful when you want to guarantee a clean slate and accept that previously connected clients will need to re-handshake.
+
+## Concurrency
+
+Input messages are processed sequentially through an `async-mutex` `Mutex`. Concurrent input is queued in order of arrival; no messages are dropped. Throughput is therefore bounded by the cost of a single context read/write cycle, but ordering is deterministic.
+
+The mutex is per-node-instance. Two `fff-ws-session` nodes pointing at the same `contextKey` are not synchronised between each other — keep them in distinct context keys, or coordinate externally.
+
+## Error routing
+
+On any validation or processing error, the node emits the failure on **both** channels:
+
+- `node.error(err, msg)` — routed to Catch nodes in the flow, suitable for centralised error handling.
+- A message on **output 2** with `msg.error` set to the failure reason.
+
+This dual routing is intentional for v0.0.3: it preserves compatibility with deployments that wire either path. A future release (`evolve-session-model`) will unify routing behind a single configurable mechanism.
+
+## Examples
+
+The `examples/` directory contains two importable flows:
+
+- [`examples/basic-flow.json`](examples/basic-flow.json) — minimal connect/disconnect flow tracking clients in the global context.
+- [`examples/advanced-flow.json`](examples/advanced-flow.json) — connect, config update, disconnect, and data retrieval from a function node.
+
+### Reading session state from a Function node
 
 ```javascript
-// In a Function node, retrieve all sessions
-const sessions = global.get('ws_sessions');
-
-// Get specific session (sessions is a Map)
-const sessionId = msg.sessionId;
-const session = sessions && sessions.get ? sessions.get(sessionId) : undefined;
+const sessions = global.get('ws_sessions') || {};
+const session = sessions[msg.sessionId];
 
 if (session) {
     msg.user = session.config.userId;
     msg.lang = session.config.language;
     msg.created = session.connectedAt;
     return msg;
-} else {
-    node.warn('Session not found: ' + sessionId);
 }
+
+node.warn('Session not found: ' + msg.sessionId);
+return null;
 ```
 
-### Broadcasting to Multiple Sessions
+### Listing all active sessions
 
-Use the `get_sessions` event to retrieve all active sessions and broadcast messages:
+Send a `get_sessions` message and read `msg.payload` in a downstream node:
 
 ```javascript
-// Send a message that triggers get_sessions event
 msg.status = { event: 'get_sessions' };
 return msg;
 
-// In a following Function node, the response will have:
+// Downstream node receives:
 // msg.payload = [
-//   { id: 'session1', config: {...}, timestamp: 1234567890 },
-//   { id: 'session2', config: {...}, timestamp: 1234567890 }
+//     { id: 'session1', config: { ... }, connectedAt: 1700000000000 },
+//     { id: 'session2', config: { ... }, connectedAt: 1700000000000 }
 // ]
 ```
 
-### Session Lifecycle
-
-Typical flow for a WebSocket session:
-
-```text
-1. User connects → event: 'connect' → Session created
-2. User action → event: 'update' → Session config updated
-3. User settings change → event: 'update' → Session updated
-4. User disconnects → event: 'disconnect' → Session removed
-5. Periodic cleanup → event: 'timeout' → Old sessions removed
-```
-
-### Using in Conditional Flows
-
-Check if a session exists before processing:
+### Conditional routing on session existence
 
 ```javascript
 const sessions = global.get('ws_sessions') || {};
-const sessionExists = sessions[msg.sessionId] !== undefined;
 
-if (sessionExists) {
-    // Route to authenticated handler
-    return [msg, null];
-} else {
-    // Route to error handler
-    msg.error = 'Session not found';
-    return [null, msg];
+if (sessions[msg.sessionId]) {
+    return [msg, null];   // authenticated path
 }
+
+msg.error = 'Session not found';
+return [null, msg];       // error path
 ```
 
-### Basic Flow
+## Limits
 
-A simple setup tracking WebSocket clients in the Global context.
+- **Session count**: limited by available memory. The node has been tested with up to 10,000 sessions without measurable degradation.
+- **Session ID**: alphanumerics, underscore and dash only; maximum 100 characters.
+- **Config size**: no hard limit. Large objects increase serialisation cost on every write.
+- **Persistence**: requires a context store that serialises with `JSON.stringify` (the default memory store works in-process only; use `localfilesystem` for cross-restart persistence).
+- **Context limits**: bound by the configured Node-RED context storage limits.
 
-![Example Flow](https://raw.githubusercontent.com/fishfarmfeeder/node-red-contrib-fff-ws-session-manager/main/examples/example-flow.png)
+## Troubleshooting
 
-*(See the `examples` folder for importable flows)*
+- **Node status shows an error**: check the Node-RED runtime log for the underlying message. Common causes are invalid `msg.status` shape or a context store that cannot serialise the data.
+- **Sessions disappear after restart**: confirm `preserveSessions: true` (the default in v0.0.3+) and that the configured context store is persistent. The default in-memory store does not survive restarts regardless of `preserveSessions`.
+- **Encrypted entries vanish**: the encryption key changed or the ciphertext is corrupted. Look for a `node.error` message listing the affected session IDs.
+- **Concurrent messages appear delayed**: this is expected. Messages are queued by the mutex and processed in order.
 
-**What happens in this flow**:
-
-1. WebSocket input receives a connection event
-2. Message is transformed to include `msg.status.event = 'connect'` and `msg.status._session.id`
-3. Node-RED WebSocket Session Manager registers the session
-4. Session can now be accessed from other nodes using the context
-5. On disconnect, the session is automatically removed
-
-### Advanced Flow
-
-An advanced example demonstrating connect, config update, disconnect, and data retrieval from other nodes.
-
-*(See `examples/advanced-flow.json` for the full flow)*
-
-**Advanced features demonstrated**:
-
-- Storing user authentication data in session config on connect
-- Updating session metadata when user preferences change
-- Retrieving all active sessions for broadcast operations
-- Automatic session cleanup on timeout
-- Accessing session data from function nodes using context API
-
-## 🤝 Contributing
-
-Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details on our code of conduct, and the process for submitting pull requests.
-
-### Development
-
-- Run tests: `npm test`
-- Lint code: `npm run lint`
-- Fix linting issues: `npm run lint:fix`
-
-## ✅ Tests & Coverage
-
-This project includes a comprehensive test-suite (Mocha + Chai) and coverage reporting via `nyc`.
-
-- Run unit tests:
+## Development
 
 ```bash
-npm test
+npm install
+npm test           # mocha test suite
+npm run lint       # eslint
+npm run coverage   # nyc lcov + text report
 ```
 
-- Generate coverage report (text + lcov):
+The test suite uses `mocha`, `chai` and `node-red-node-test-helper`. Coverage is configured in `.nycrc`.
 
-```bash
-npm run coverage
-```
+If you use pnpm and `npm run coverage` reports `nyc not found`, run `pnpm install --include=dev` to materialise the dev dependencies that are otherwise skipped.
 
-Coverage configuration is in `.nycrc`. The `coverage` script uses `nyc --reporter=lcov --reporter=text mocha` and will print a summary to the console and produce an `lcov` report useful for CI integrations.
+## Migration from v0.0.2
 
-## ⚠️ Note about session persistence on Node-RED start
+v0.0.3 introduces several behavioural changes that are safe by default but worth knowing about when upgrading:
 
-To avoid stale/ghost sessions after Node-RED restarts or flow redeploys, this node now clears the persisted sessions for the configured `contextKey` when the node initializes. This prevents previously-closed sessions from appearing as active after a restart. If you rely on external persistence, consider adapting the node or using external shared storage to restore session state explicitly.
+- `preserveSessions` defaults to `true`. Sessions on file-backed context stores now survive restarts. To restore the v0.0.2 wipe-on-restart behaviour, set `preserveSessions: false`.
+- The encryption key input is now visible in the editor under the **Encrypt Config** checkbox. Existing deployments that enabled encryption without setting a credential were silently using a hardcoded fallback; v0.0.3 disables encryption (with a warning) in that case instead.
+- Stored sessions are now a plain JSON object rather than a `Map`. Function-node code that used `sessions.get(id)` should be updated to `sessions[id]`. The node still reads back the legacy `Map` and legacy `Array` formats for backwards compatibility.
+- Concurrent input messages are now queued rather than dropped. Existing flows that relied on rapid duplicate suppression should explicitly debounce upstream.
+- Decryption failures now omit the affected entry from `get_sessions` and emit a `node.error`, rather than returning an empty config.
 
-If you want different behavior (preserve sessions across restarts), the node source exposes where to change this behavior (`ws-session.js` — remove the reset on init or implement a `preserveSessions` option).
+See [CHANGELOG.md](CHANGELOG.md) for the full list of changes.
 
-## 📄 License
+## Contributing
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
----
-Made with ❤️ by Fish Farm Feeder
+## License
+
+MIT. See [LICENSE](LICENSE).

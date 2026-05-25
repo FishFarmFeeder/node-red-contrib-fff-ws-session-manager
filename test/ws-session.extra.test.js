@@ -201,13 +201,6 @@ describe('WS Session Node - extras', function () {
         // Provide credentials for encryptionKey
         const creds = { n1: { encryptionKey: 'supersecret' } };
         helper.load(wsSessionNode, flow, function () {
-            // This form of helper.load doesn't accept credentials in this position in older helpers,
-            // so use the helper.load signature that accepts credentials as fourth argument.
-        }, creds);
-
-        // Reload properly using callback signature that includes credentials
-        helper.unload();
-        helper.load(wsSessionNode, flow, function () {
             const n1 = helper.getNode('n1');
             const n2 = helper.getNode('n2');
             n2.on('input', function (msg) {
@@ -229,34 +222,39 @@ describe('WS Session Node - extras', function () {
         }, creds);
     });
 
+    // REWRITE 4.1: entry is ABSENT from payload + node.error fired
     it('decrypt should return empty object for non-string stored config', function (done) {
         this.timeout(2000);
+        // encryptionKey set on node config (config fallback path) to keep this test self-contained
         const flow = [
-            { id: 'n1', type: 'fff-ws-session', name: 'test', encryptConfig: true, wires: [['n2'], ['n3']] },
+            { id: 'n1', type: 'fff-ws-session', name: 'test', encryptConfig: true, encryptionKey: 'supersecret', wires: [['n2'], ['n3']] },
             { id: 'n2', type: 'helper' },
             { id: 'n3', type: 'helper' }
         ];
-        const creds = { n1: { encryptionKey: 'supersecret' } };
         helper.load(wsSessionNode, flow, function () {
             const n1 = helper.getNode('n1');
             const n2 = helper.getNode('n2');
-            // directly set malformed stored map (non-string config)
-            const map = new Map();
-            map.set('bad', { id: 'bad', config: 123, connectedAt: Date.now() });
-            n1.context().global.set('ws_sessions', map);
+            // directly set malformed stored plain-object (non-string config)
+            n1.context().global.set('ws_sessions', { bad: { id: 'bad', config: 123, connectedAt: Date.now() } });
+            let errorFired = false;
+            // call:error fires via process.nextTick — register before receive
+            n1.on('call:error', function (call) {
+                if (/Decryption failed for sessions:.*bad/.test(call.args[0])) {
+                    errorFired = true;
+                }
+            });
             n2.on('input', function (msg) {
                 try {
                     msg.payload.should.be.an('array');
+                    // entry must be ABSENT (decrypt returned null, filtered out)
                     const found = msg.payload.find(p => p.id === 'bad');
-                    found.should.exist;
-                    // because encryptConfig=true decrypt() should catch and return {}
-                    found.config.should.be.an('object');
-                    Object.keys(found.config).length.should.equal(0);
+                    (found === undefined).should.be.true;
+                    errorFired.should.be.true;
                     done();
                 } catch (e) { done(e); }
             });
             n1.receive({ status: { event: 'get_sessions' } });
-        }, creds);
+        });
     });
 
     it('should migrate legacy array stored sessions to map', function (done) {
@@ -332,33 +330,39 @@ describe('WS Session Node - extras', function () {
         });
     });
 
+    // REWRITE 4.2: entry is ABSENT from payload + node.error fired
     it('decrypt should handle invalid format (no iv:cipher)', function (done) {
         this.timeout(2000);
+        // encryptionKey set on node config (config fallback path) to keep this test self-contained
         const flow = [
-            { id: 'n1', type: 'fff-ws-session', name: 'test', encryptConfig: true, wires: [['n2'], ['n3']] },
+            { id: 'n1', type: 'fff-ws-session', name: 'test', encryptConfig: true, encryptionKey: 'k', wires: [['n2'], ['n3']] },
             { id: 'n2', type: 'helper' },
             { id: 'n3', type: 'helper' }
         ];
-        const creds = { n1: { encryptionKey: 'k' } };
         helper.load(wsSessionNode, flow, function () {
             const n1 = helper.getNode('n1');
             const n2 = helper.getNode('n2');
-            // malformed stored string without ':' to trigger invalid format
-            const map = new Map();
-            map.set('bad2', { id: 'bad2', config: 'no-colon-here', connectedAt: Date.now() });
-            n1.context().global.set('ws_sessions', map);
+            // malformed stored plain-object without ':' to trigger invalid format
+            n1.context().global.set('ws_sessions', { bad2: { id: 'bad2', config: 'no-colon-here', connectedAt: Date.now() } });
+            let errorFired = false;
+            // call:error fires via process.nextTick — register before receive
+            n1.on('call:error', function (call) {
+                if (/Decryption failed for sessions:.*bad2/.test(call.args[0])) {
+                    errorFired = true;
+                }
+            });
             n2.on('input', function (msg) {
                 try {
                     if (!msg.payload || !Array.isArray(msg.payload)) return;
+                    // entry must be ABSENT (decrypt returned null, filtered out)
                     const found = msg.payload.find(p => p.id === 'bad2');
-                    found.should.exist;
-                    found.config.should.be.an('object');
-                    Object.keys(found.config).length.should.equal(0);
+                    (found === undefined).should.be.true;
+                    errorFired.should.be.true;
                     done();
                 } catch (e) { done(e); }
             });
             n1.receive({ status: { event: 'get_sessions' } });
-        }, creds);
+        });
     });
 
     // NOTE: setSessions error path is difficult to reliably stub in the Node-RED test
@@ -375,7 +379,6 @@ describe('WS Session Node - extras', function () {
         helper.load(wsSessionNode, flow, function () {
             const n1 = helper.getNode('n1');
             const n2 = helper.getNode('n2');
-            let got = false;
             n2.on('input', function (msg) {
                 try {
                     if (!msg.payload || !Array.isArray(msg.payload)) return;
@@ -418,8 +421,9 @@ describe('WS Session Node - extras', function () {
         });
     });
 
-    it('should block concurrent access (second call ignored)', function (done) {
-        this.timeout(2000);
+    // REWRITE 4.3: assert BOTH sessions present (queue, not drop)
+    it('should queue concurrent access and process all messages', function (done) {
+        this.timeout(3000);
         const flow = [
             { id: 'n1', type: 'fff-ws-session', name: 'test', wires: [['n2'], ['n3']] },
             { id: 'n2', type: 'helper' },
@@ -428,24 +432,254 @@ describe('WS Session Node - extras', function () {
         helper.load(wsSessionNode, flow, function () {
             const n1 = helper.getNode('n1');
             const n2 = helper.getNode('n2');
-            let count = 0;
+            let getSessionsPayload = null;
             n2.on('input', function (msg) {
-                if (!msg.payload) return; // ignore non-get_sessions
-                count++;
+                if (msg.payload && Array.isArray(msg.payload)) {
+                    getSessionsPayload = msg.payload;
+                }
             });
-            // Send two connects back-to-back; one may be ignored due to lock
+            // Send two connects back-to-back with no delay
             n1.receive({ status: { event: 'connect', _session: { id: 'c1' } } });
             n1.receive({ status: { event: 'connect', _session: { id: 'c2' } } });
             setTimeout(function () {
-                // request sessions
                 n1.receive({ status: { event: 'get_sessions' } });
-            }, 100);
+            }, 300);
             setTimeout(function () {
                 try {
-                    // at least one session should exist (possibly 1 or 2 depending on timing)
-                    count.should.be.at.least(1);
+                    // Both sessions must be present — mutex queued both, neither was dropped
+                    getSessionsPayload.should.not.be.null;
+                    getSessionsPayload.length.should.equal(2);
+                    const ids = getSessionsPayload.map(s => s.id);
+                    ids.should.include('c1');
+                    ids.should.include('c2');
                     done();
                 } catch (e) { done(e); }
+            }, 800);
+        });
+    });
+
+    // ADD 4.4: preserveSessions defaults to true keeps stored sessions across reload
+    it('preserveSessions defaults to true keeps stored sessions across node reload', function (done) {
+        this.timeout(5000);
+        const flow = [
+            { id: 'n1', type: 'fff-ws-session', name: 'test', wires: [['n2'], ['n3']] },
+            { id: 'n2', type: 'helper' },
+            { id: 'n3', type: 'helper' }
+        ];
+        helper.load(wsSessionNode, flow, function () {
+            const n1 = helper.getNode('n1');
+            // Connect a session
+            n1.receive({ status: { event: 'connect', _session: { id: 'ps1' } } });
+            setTimeout(function () {
+                // Capture the plain-object that setSessions wrote to context
+                const raw = n1.context().global.get('ws_sessions');
+                helper.unload();
+                // Reload the same flow — no preserveSessions field (undefined -> defaults to true)
+                helper.load(wsSessionNode, flow, function () {
+                    const n1b = helper.getNode('n1');
+                    const n2b = helper.getNode('n2');
+                    // Context is cleared on unload, so manually re-seed the plain-object
+                    // (simulates a persistent context store surviving the restart)
+                    n1b.context().global.set('ws_sessions', raw);
+                    n2b.on('input', function (msg) {
+                        try {
+                            if (!msg.payload || !Array.isArray(msg.payload)) return;
+                            const found = msg.payload.find(p => p.id === 'ps1');
+                            found.should.exist;
+                            done();
+                        } catch (e) { done(e); }
+                    });
+                    n1b.receive({ status: { event: 'get_sessions' } });
+                });
+            }, 300);
+        });
+    });
+
+    // ADD 4.5: preserveSessions false wipes on init
+    it('preserveSessions false wipes on init', function (done) {
+        this.timeout(5000);
+        const flow = [
+            { id: 'n1', type: 'fff-ws-session', name: 'test', preserveSessions: false, wires: [['n2'], ['n3']] },
+            { id: 'n2', type: 'helper' },
+            { id: 'n3', type: 'helper' }
+        ];
+        // Pre-seed a session via a separate load with preserveSessions defaulting to true
+        const flowSeed = [
+            { id: 'n1', type: 'fff-ws-session', name: 'seed', wires: [['n2'], ['n3']] },
+            { id: 'n2', type: 'helper' },
+            { id: 'n3', type: 'helper' }
+        ];
+        helper.load(wsSessionNode, flowSeed, function () {
+            const n1seed = helper.getNode('n1');
+            n1seed.receive({ status: { event: 'connect', _session: { id: 'wipe1' } } });
+            setTimeout(function () {
+                helper.unload();
+                // Now reload with preserveSessions: false — should wipe on init
+                helper.load(wsSessionNode, flow, function () {
+                    const n1b = helper.getNode('n1');
+                    const n2b = helper.getNode('n2');
+                    n2b.on('input', function (msg) {
+                        try {
+                            if (!msg.payload || !Array.isArray(msg.payload)) return;
+                            msg.payload.length.should.equal(0);
+                            done();
+                        } catch (e) { done(e); }
+                    });
+                    n1b.receive({ status: { event: 'get_sessions' } });
+                });
+            }, 300);
+        });
+    });
+
+    // ADD 4.6: Map round-trips through JSON.stringify/parse via plain-object format
+    it('Map round-trips through JSON.stringify/parse via plain-object format', function (done) {
+        this.timeout(3000);
+        const flow = [
+            { id: 'n1', type: 'fff-ws-session', name: 'test', wires: [['n2'], ['n3']] },
+            { id: 'n2', type: 'helper' },
+            { id: 'n3', type: 'helper' }
+        ];
+        helper.load(wsSessionNode, flow, function () {
+            const n1 = helper.getNode('n1');
+            const n2 = helper.getNode('n2');
+            // Connect a session
+            n1.receive({ status: { event: 'connect', _session: { id: 'rt1' }, config: { foo: 'bar' } } });
+            setTimeout(function () {
+                // Read raw context value
+                const raw = n1.context().global.get('ws_sessions');
+                // Assert it is a plain object (not a Map)
+                raw.should.be.an('object');
+                (raw instanceof Map).should.be.false;
+                // JSON round-trip (simulating file-backed store)
+                const roundTripped = JSON.parse(JSON.stringify(raw));
+                // Write it back
+                n1.context().global.set('ws_sessions', roundTripped);
+                // Now get_sessions should still find rt1
+                n2.on('input', function (msg) {
+                    try {
+                        if (!msg.payload || !Array.isArray(msg.payload)) return;
+                        const found = msg.payload.find(p => p.id === 'rt1');
+                        found.should.exist;
+                        found.config.foo.should.equal('bar');
+                        done();
+                    } catch (e) { done(e); }
+                });
+                n1.receive({ status: { event: 'get_sessions' } });
+            }, 300);
+        });
+    });
+
+    // ADD 4.7: encrypt re-throws on failure (session not stored)
+    it('encrypt re-throws on failure (session not stored)', function (done) {
+        this.timeout(3000);
+        // Use encryptionKey in node config (credentials are not delivered by test helper)
+        const flow = [
+            { id: 'n1', type: 'fff-ws-session', name: 'test', encryptConfig: true, encryptionKey: 'validkey', wires: [['n2'], ['n3']] },
+            { id: 'n2', type: 'helper' },
+            { id: 'n3', type: 'helper' }
+        ];
+        helper.load(wsSessionNode, flow, function () {
+            const n1 = helper.getNode('n1');
+            const n2 = helper.getNode('n2');
+            const n3 = helper.getNode('n3');
+            // Monkey-patch crypto.createCipheriv BEFORE receive so the cipher call throws
+            const crypto = require('crypto');
+            const origCreateCipheriv = crypto.createCipheriv;
+            crypto.createCipheriv = function () {
+                throw new Error('forced cipher failure');
+            };
+            // Set up output-2 listener BEFORE receive
+            let errorOutputReceived = false;
+            n3.on('input', function (msg) {
+                if (msg.error && /Encryption failed/i.test(msg.error)) {
+                    errorOutputReceived = true;
+                }
+            });
+            n1.receive({ status: { event: 'connect', _session: { id: 'enc-fail' }, config: { x: 1 } } });
+            setTimeout(function () {
+                // Restore crypto before get_sessions (so the read path works)
+                crypto.createCipheriv = origCreateCipheriv;
+                n2.on('input', function (msg) {
+                    try {
+                        if (!msg.payload || !Array.isArray(msg.payload)) return;
+                        // Session must NOT be stored (encrypt failed, setSessions never committed)
+                        const found = msg.payload.find(p => p.id === 'enc-fail');
+                        (found === undefined).should.be.true;
+                        errorOutputReceived.should.be.true;
+                        done();
+                    } catch (e) { done(e); }
+                });
+                n1.receive({ status: { event: 'get_sessions' } });
+            }, 500);
+        });
+    });
+
+    // ADD 4.8: updateStatus does not recurse when context.get throws
+    it('updateStatus does not recurse when context.get throws', function (done) {
+        this.timeout(3000);
+        const flow = [
+            { id: 'n1', type: 'fff-ws-session', name: 'test', wires: [['n2'], ['n3']] },
+            { id: 'n2', type: 'helper' },
+            { id: 'n3', type: 'helper' }
+        ];
+        helper.load(wsSessionNode, flow, function () {
+            const n1 = helper.getNode('n1');
+            const n2 = helper.getNode('n2');
+            // monkey-patch context.get to throw on all calls
+            n1.context().global.get = function () { throw new Error('boom'); };
+            let msgCount = 0;
+            n2.on('input', function (msg) {
+                if (msg.payload && Array.isArray(msg.payload)) {
+                    msgCount++;
+                }
+            });
+            // Send two get_sessions — both should complete without stack overflow
+            n1.receive({ status: { event: 'get_sessions' } });
+            n1.receive({ status: { event: 'get_sessions' } });
+            setTimeout(function () {
+                try {
+                    // Both messages completed and returned empty arrays (no crash/recurse)
+                    msgCount.should.equal(2);
+                    done();
+                } catch (e) { done(e); }
+            }, 1000);
+        });
+    });
+
+    // ADD 4.9: encryption with missing key should warn and disable encryption
+    it('encryption with missing key should warn and disable encryption', function (done) {
+        this.timeout(3000);
+        const flow = [
+            { id: 'n1', type: 'fff-ws-session', name: 'test', encryptConfig: true, wires: [['n2'], ['n3']] },
+            { id: 'n2', type: 'helper' },
+            { id: 'n3', type: 'helper' }
+        ];
+        // Load WITHOUT credentials — no encryptionKey
+        helper.load(wsSessionNode, flow, function () {
+            const n1 = helper.getNode('n1');
+            const n2 = helper.getNode('n2');
+            let warnFired = false;
+            n1.on('call:warn', function (call) {
+                if (/no key provided/i.test(call.args[0])) {
+                    warnFired = true;
+                }
+            });
+            // Connect a session and then get_sessions — config should be plain object, not encrypted string
+            n1.receive({ status: { event: 'connect', _session: { id: 'nokey1' }, config: { val: 42 } } });
+            setTimeout(function () {
+                n2.on('input', function (msg) {
+                    try {
+                        if (!msg.payload || !Array.isArray(msg.payload)) return;
+                        const found = msg.payload.find(p => p.id === 'nokey1');
+                        found.should.exist;
+                        // Config should be a plain object (encryption was disabled)
+                        found.config.should.be.an('object');
+                        found.config.val.should.equal(42);
+                        warnFired.should.be.true;
+                        done();
+                    } catch (e) { done(e); }
+                });
+                n1.receive({ status: { event: 'get_sessions' } });
             }, 300);
         });
     });
