@@ -1,20 +1,33 @@
 module.exports = function(RED) {
     const crypto = require('crypto');
+    const { Mutex } = require('async-mutex');
 
     function WsSessionNode(config) {
         RED.nodes.createNode(this, config);
         var node = this;
-        
+
         // Configuration
         var contextKey = config.contextKey || 'ws_sessions';
         var scope = config.scope || 'global';
         var prefix = config.prefix || '';
         var encryptConfig = config.encryptConfig || false;
+
         // Prefer credentials for sensitive values (Node-RED credentials store)
-        var encryptionKey = (node.credentials && node.credentials.encryptionKey) || config.encryptionKey || 'default_key_change_me';
+        var providedKey = (node.credentials && node.credentials.encryptionKey) || config.encryptionKey;
+        var encryptionKey;
+        if (encryptConfig && !providedKey) {
+            node.warn('Encryption enabled but no key provided; encryption disabled for this node');
+            encryptConfig = false;
+            encryptionKey = null;
+        } else {
+            encryptionKey = providedKey || 'default_key_change_me';
+        }
 
         // Full context key with prefix
         var fullContextKey = prefix + contextKey;
+
+        // Per-node mutex (replaces boolean contextLock)
+        var mutex = new Mutex();
 
         // Encryption functions (use createCipheriv/createDecipheriv)
         // We derive a 32-byte key from the configured encryptionKey using SHA-256
@@ -25,17 +38,12 @@ module.exports = function(RED) {
 
         function encrypt(text) {
             if (!encryptConfig) return text;
-            try {
-                const key = deriveKey(encryptionKey);
-                const iv = crypto.randomBytes(16); // AES block size
-                const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
-                let encrypted = cipher.update(JSON.stringify(text), 'utf8', 'hex');
-                encrypted += cipher.final('hex');
-                return iv.toString('hex') + ':' + encrypted;
-            } catch (error) {
-                node.error('Encryption failed: ' + error.message);
-                return text;
-            }
+            const key = deriveKey(encryptionKey);
+            const iv = crypto.randomBytes(16);
+            const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+            let encrypted = cipher.update(JSON.stringify(text), 'utf8', 'hex');
+            encrypted += cipher.final('hex');
+            return iv.toString('hex') + ':' + encrypted;
         }
 
         function decrypt(encrypted) {
@@ -52,8 +60,7 @@ module.exports = function(RED) {
                 decrypted += decipher.final('utf8');
                 return JSON.parse(decrypted);
             } catch (error) {
-                node.error('Decryption failed: ' + error.message);
-                return {};
+                return null;
             }
         }
 
@@ -67,9 +74,6 @@ module.exports = function(RED) {
             return trimmed;
         }
 
-        // Simple lock for context access
-        var contextLock = false;
-
         // Determine the context scope to use
         var context;
         if (scope === 'global') {
@@ -80,54 +84,56 @@ module.exports = function(RED) {
             context = node.context();
         }
 
-        // Helper to get sessions from context (now using Map)
+        // Helper to get sessions from context
         function getSessions() {
             try {
                 var stored = context.get(fullContextKey);
+                var decryptedMap = new Map();
+                var badIds = [];
+
                 if (stored instanceof Map) {
-                    // Decrypt configs if needed and preserve metadata like connectedAt
-                    var decryptedMap = new Map();
+                    // Legacy in-memory path (process still has Map ref from before upgrade)
                     for (let [key, session] of stored) {
-                        decryptedMap.set(key, {
-                            id: session.id,
-                            config: decrypt(session.config),
-                            connectedAt: session.connectedAt
-                        });
+                        var dec = decrypt(session.config);
+                        if (dec === null) { badIds.push(key); continue; }
+                        decryptedMap.set(key, { id: session.id, config: dec, connectedAt: session.connectedAt });
                     }
-                    return decryptedMap;
                 } else if (Array.isArray(stored)) {
-                    // Migrate from old array format
-                    var map = new Map();
-                    stored.forEach(s => map.set(s.id, s));
-                    return map;
-                } else {
-                    return new Map();
+                    // Legacy array migration (preserved unchanged from v0.0.2)
+                    stored.forEach(s => decryptedMap.set(s.id, s));
+                } else if (stored && typeof stored === 'object') {
+                    // Plain-object wire format (Bug #4)
+                    for (var key of Object.keys(stored)) {
+                        var session = stored[key];
+                        var dec2 = decrypt(session.config);
+                        if (dec2 === null) { badIds.push(key); continue; }
+                        decryptedMap.set(key, { id: session.id, config: dec2, connectedAt: session.connectedAt });
+                    }
                 }
+
+                if (badIds.length) {
+                    node.error('Decryption failed for sessions: ' + badIds.join(', '));
+                }
+                return decryptedMap;
             } catch (error) {
                 node.error('Error retrieving sessions from context: ' + error.message);
-                updateStatus();
+                node.status({fill:'red', shape:'ring', text: 'Error reading'});
                 return new Map();
             }
         }
 
         // Helper to set sessions to context and update status
         function setSessions(sessions) {
-            try {
-                // Encrypt configs before storing
-                var encryptedMap = new Map();
-                for (let [key, session] of sessions) {
-                    encryptedMap.set(key, {
-                        id: session.id,
-                        config: encrypt(session.config),
-                        connectedAt: session.connectedAt
-                    });
-                }
-                context.set(fullContextKey, encryptedMap);
-                updateStatus();
-            } catch (error) {
-                node.error('Error saving sessions to context: ' + error.message);
-                node.status({fill:'red', shape:'ring', text: 'Error saving'});
+            var encryptedMap = new Map();
+            for (let [key, session] of sessions) {
+                encryptedMap.set(key, {
+                    id: session.id,
+                    config: encrypt(session.config),
+                    connectedAt: session.connectedAt
+                });
             }
+            context.set(fullContextKey, Object.fromEntries(encryptedMap));
+            updateStatus();
         }
 
         // Update node status with active session count
@@ -136,26 +142,21 @@ module.exports = function(RED) {
             node.status({fill:'green', shape:'dot', text: sessions.size + ' sessions'});
         }
 
-        // Reset persisted sessions on startup to avoid stale/closed sessions
-        try {
-            // Clear any stored sessions so that on Node-RED start we don't keep stale entries
-            setSessions(new Map());
-        } catch (err) {
-            node.error('Failed to reset sessions on start: ' + err.message);
+        // Optionally reset persisted sessions on startup (default: preserve)
+        var preserveSessions = config.preserveSessions !== false;
+        if (!preserveSessions) {
+            try {
+                setSessions(new Map());
+            } catch (err) {
+                node.error('Failed to reset sessions on start: ' + err.message);
+            }
         }
 
         // Initialize status
         updateStatus();
 
         node.on('input', function(msg, send, done) {
-            // Simple lock to prevent concurrent access
-            if (contextLock) {
-                node.warn('Concurrent access blocked for session: ' + (msg.status && msg.status._session ? msg.status._session.id : 'unknown'));
-                return;
-            }
-            contextLock = true;
-
-            try {
+            mutex.runExclusive(async function () {
                 // Basic message skeleton check
                 if (!msg.status || typeof msg.status !== 'object') {
                     var errorMsg = RED.util.cloneMessage(msg);
@@ -273,7 +274,7 @@ module.exports = function(RED) {
                     var responseMsg = RED.util.cloneMessage(msg);
                     responseMsg.payload = sessionList;
                     send([responseMsg, null]);
-                    return; // Don't save sessions for read-only operation
+                    return; // read-only, no setSessions; done() fires via .then()
                 } else {
                     var errorMsg = RED.util.cloneMessage(msg);
                     errorMsg.error = 'Unknown event: ' + event;
@@ -285,10 +286,13 @@ module.exports = function(RED) {
 
                 setSessions(sessions);
                 send([msg, null]);
-            } finally {
-                contextLock = false;
-                done();
-            }
+            }).then(
+                function () { done(); },
+                function (err) {
+                    send([null, { topic: msg.topic, error: 'Encryption failed: ' + (err.message || String(err)) }]);
+                    done(err);
+                }
+            );
         });
     }
     RED.nodes.registerType('fff-ws-session', WsSessionNode, {

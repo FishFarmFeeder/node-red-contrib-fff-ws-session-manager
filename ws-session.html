@@ -7,7 +7,8 @@
             contextKey: {value:"ws_sessions"},
             scope: {value:"global"},
             prefix: {value:""},
-            encryptConfig: {value:false}
+            encryptConfig: {value:false},
+            preserveSessions: {value:true}
         },
         inputs:1,
         outputs:2,
@@ -59,7 +60,14 @@
         <label for="node-input-encryptConfig"><i class="fa fa-lock"></i> Encrypt Config</label>
         <input type="checkbox" id="node-input-encryptConfig" title="Enable encryption for session config data">
     </div>
-    <!-- Encryption key is stored in node credentials (secure). No plaintext field here. -->
+    <div class="form-row">
+        <label for="node-input-preserveSessions"><i class="fa fa-archive"></i> Preserve Sessions</label>
+        <input type="checkbox" id="node-input-preserveSessions" title="Keep sessions across Node-RED restarts (default: enabled)">
+    </div>
+    <div class="form-row" id="encryption-key-row">
+        <label for="node-input-encryptionKey"><i class="fa fa-key"></i> Encryption Key</label>
+        <input type="password" id="node-input-encryptionKey">
+    </div>
 </script>
 
 <script type="text/html" data-help-name="fff-ws-session">
@@ -100,14 +108,23 @@
     <p>This node maintains a list of active WebSocket sessions in the specified context store (default: <code>global.ws_sessions</code>).</p>
     <p>It listens for connection and disconnection events to keep the list in sync.</p>
     <p>Logs successful operations (connects, disconnects, updates) and errors for monitoring. The node status shows active sessions and total operations.</p>
-    <p>Uses a Map for efficient O(1) lookups and includes concurrency control to handle simultaneous messages safely.</p>
+    <p>Uses a Mutex for serialised, non-dropping concurrency control — all messages are queued and processed in order.</p>
     <p>Security features: Sanitizes session IDs, optional config encryption, and key prefixing for isolation.</p>
     <p>Additional events: <code>timeout</code> to clean expired sessions, <code>get_sessions</code> to retrieve active sessions list.</p>
-    
+
+    <h4>Preserve Sessions (preserveSessions)</h4>
+    <p>When <strong>Preserve Sessions</strong> is enabled (default), sessions stored in a persistent context store (e.g. <code>localfilesystem</code>) survive Node-RED restarts and flow redeploys. Set it to <em>disabled</em> to restore the v0.0.2 wipe-on-restart behaviour — the session store will be cleared every time the node initialises.</p>
+
+    <h4>Encryption Key</h4>
+    <p>When <strong>Encrypt Config</strong> is checked, an <strong>Encryption Key</strong> field appears below it. Enter your key there — Node-RED stores it in the encrypted credentials store and it will not appear in <code>flows.json</code>. If you leave the field empty while encryption is enabled, the node will log a <code>node.warn</code> and automatically disable encryption for that session rather than silently using a hardcoded fallback key.</p>
+
+    <h4>Error Routing</h4>
+    <p>On error, the node fires both <code>node.error(err, msg)</code> (routed to Catch nodes) and sends a message to output 2 with an <code>error</code> property. This dual-error behaviour is intentional and will be unified in a future release.</p>
+
     <h4>Retrieving Session Data</h4>
-    <p>To access stored session data from other nodes, use Node-RED's context functions:</p>
+    <p>To access stored session data from other nodes, use Node-RED's context functions. Sessions are stored as a plain object (not a Map) since v0.0.3:</p>
     <ul>
-        <li><code>global.get('ws_sessions').get('session_id').config.userId</code> - Get specific config data.</li>
-        <li><code>Array.from(global.get('ws_sessions').values())</code> - Get all sessions as array.</li>
+        <li><code>global.get('ws_sessions')['session_id'].config.userId</code> - Get specific config data.</li>
+        <li><code>Object.values(global.get('ws_sessions') || {})</code> - Get all sessions as array.</li>
     </ul>
 </script>
