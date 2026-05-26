@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/SemVer).
 
+## [0.0.4] - 2026-05-25
+
+### Fixed
+
+- **Broken node icon (since v0.0.1)**: `ws-session.html` referenced `icon: "feed.svg"` but no such file existed in the package. Node-RED was falling back to the default icon for every install. Added `icons/feed.svg`.
+- **Bloated npm tarball**: published packages prior to v0.0.4 included development files (`test/`, `openspec/`, `.github/`, `coverage/`, local Claude settings, etc.), inflating the published size to ~225 kB and leaking local tooling configuration. Added an explicit `"files"` whitelist to `package.json` so only the runtime assets (`ws-session.js`, `ws-session.html`, `icons/`, `examples/`) are published. The published tarball is now ~80 kB.
+
+### Changed
+
+- `.gitignore` now excludes `.claude/` to prevent local Claude Code settings from being committed.
+
 ## [0.0.3] - 2026-05-25
 
 ### BEHAVIORAL CHANGES (read before upgrading)
