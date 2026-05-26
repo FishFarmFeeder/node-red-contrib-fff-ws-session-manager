@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="40" height="40">
+  <title>WS Sessions</title>
+  <path d="M4 20 C 4 12, 16 9, 24 14 L 36 8 L 34 20 L 36 32 L 24 26 C 16 31, 4 28, 4 20 Z" fill="#ffffff"/>
+  <circle cx="11" cy="17" r="1.7" fill="#333333"/>
+  <circle cx="20" cy="12" r="1.2" fill="#ffffff" opacity="0.7"/>
+  <circle cx="24" cy="22" r="0.9" fill="#ffffff" opacity="0.7"/>
+</svg>
